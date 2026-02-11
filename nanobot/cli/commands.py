@@ -279,6 +279,7 @@ def _make_provider(config):
         default_model=model,
         extra_headers=p.extra_headers if p else None,
         provider_name=config.get_provider_name(),
+        needs_additional_xml_for_tools=p.needs_additional_xml_for_tools,
     )
 
 

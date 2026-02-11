@@ -27,8 +27,9 @@ class LiteLLMProvider(LLMProvider):
         default_model: str = "anthropic/claude-opus-4-5",
         extra_headers: dict[str, str] | None = None,
         provider_name: str | None = None,
+        needs_additional_xml_for_tools: bool = False,
     ):
-        super().__init__(api_key, api_base)
+        super().__init__(api_key, api_base, needs_additional_xml_for_tools)
         self.default_model = default_model
         self.extra_headers = extra_headers or {}
         

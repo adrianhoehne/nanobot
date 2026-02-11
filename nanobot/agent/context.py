@@ -18,12 +18,13 @@ class ContextBuilder:
     into a coherent prompt for the LLM.
     """
     
-    BOOTSTRAP_FILES = ["AGENTS.md", "SOUL.md", "USER.md", "TOOLS.md", "IDENTITY.md"]
+    BOOTSTRAP_FILES = ["AGENTS.md", "SOUL.md", "USER.md"]
     
-    def __init__(self, workspace: Path):
+    def __init__(self, workspace: Path, needs_additional_tools_xml: bool = True):
         self.workspace = workspace
         self.memory = MemoryStore(workspace)
         self.skills = SkillsLoader(workspace)
+        self.needs_additional_tools_xml = needs_additional_tools_xml
     
     def build_system_prompt(self, skill_names: list[str] | None = None) -> str:
         """
@@ -35,11 +36,10 @@ class ContextBuilder:
         Returns:
             Complete system prompt.
         """
-        parts = []
-        
+
         # Core identity
-        parts.append(self._get_identity())
-        
+        parts = [self._get_identity()]
+
         # Bootstrap files
         bootstrap = self._load_bootstrap_files()
         if bootstrap:
@@ -49,25 +49,36 @@ class ContextBuilder:
         memory = self.memory.get_memory_context()
         if memory:
             parts.append(f"# Memory\n\n{memory}")
-        
-        # Skills - progressive loading
-        # 1. Always-loaded skills: include full content
-        always_skills = self.skills.get_always_skills()
-        if always_skills:
-            always_content = self.skills.load_skills_for_context(always_skills)
-            if always_content:
-                parts.append(f"# Active Skills\n\n{always_content}")
-        
-        # 2. Available skills: only show summary (agent uses read_file to load)
-        skills_summary = self.skills.build_skills_summary()
-        if skills_summary:
-            parts.append(f"""# Skills
 
-The following skills extend your capabilities. To use a skill, read its SKILL.md file using the read_file tool.
-Skills with available="false" need dependencies installed first - you can try installing them with apt/brew.
+        if self.needs_additional_tools_xml:
+            # Skills - progressive loading, helps for LLMs without tool training.
+            # 1. Always-loaded skills: include full content
+            always_skills = self.skills.get_always_skills()
+            if always_skills:
+                always_content = self.skills.load_skills_for_context(always_skills)
+                if always_content:
+                    parts.append(f"# Active Skills\n\n{always_content}")
 
-{skills_summary}""")
-        
+            # 2. Available skills: only show summary (agent uses read_file to load)
+            skills_summary = self.skills.build_skills_summary()
+            if skills_summary:
+                parts.append(f"""# Skills
+            The following skills extend your capabilities. To use a skill, read its SKILL.md file using the read_file tool.
+            Skills with available="false" need dependencies installed first - you can try installing them with apt/brew.{skills_summary}""")
+        else:
+            # Available skills: keep it tiny with only names. The skills are already transmitted in chatml style
+            skills_list = skill_names or self.skills.list_skills()
+            names = [s["name"] if isinstance(s, dict) else s for s in skills_list]
+            names = sorted(set(names))
+            if names:
+                workspace_path = str(self.workspace.expanduser().resolve())
+                parts.append(
+                    "# Skills\n\n"
+                    "Available skills: " + ", ".join(names) + "\n"
+                    "Load details with read_file: " + workspace_path + "/skills/{{skill-name}}/SKILL.md\n"
+                )
+
+
         return "\n\n---\n\n".join(parts)
     
     def _get_identity(self) -> str:

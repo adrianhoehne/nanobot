@@ -36,9 +36,10 @@ class LLMProvider(ABC):
     while maintaining a consistent interface.
     """
     
-    def __init__(self, api_key: str | None = None, api_base: str | None = None):
+    def __init__(self, api_key: str | None = None, api_base: str | None = None, needs_additional_xml_for_tools: bool = True):
         self.api_key = api_key
         self.api_base = api_base
+        self.needs_additional_xml_for_tools = needs_additional_xml_for_tools
     
     @abstractmethod
     async def chat(
@@ -68,3 +69,6 @@ class LLMProvider(ABC):
     def get_default_model(self) -> str:
         """Get the default model for this provider."""
         pass
+
+    def needs_additional_xml_for_tools(self):
+        return self.needs_additional_xml_for_tools

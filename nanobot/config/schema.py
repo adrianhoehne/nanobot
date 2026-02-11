@@ -173,6 +173,7 @@ class ProviderConfig(BaseModel):
     api_key: str = ""
     api_base: str | None = None
     extra_headers: dict[str, str] | None = None  # Custom headers (e.g. APP-Code for AiHubMix)
+    needs_additional_xml_for_tools: bool = True # Helpful for LLMs that are not trained for using tools.
 
 
 class ProvidersConfig(BaseModel):
@@ -211,7 +212,6 @@ class WebToolsConfig(BaseModel):
 class ExecToolConfig(BaseModel):
     """Shell exec tool configuration."""
     timeout: int = 60
-
 
 class ToolsConfig(BaseModel):
     """Tools configuration."""
