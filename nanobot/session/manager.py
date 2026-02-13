@@ -49,8 +49,14 @@ class Session:
         # Get recent messages
         recent = self.messages[-max_messages:] if len(self.messages) > max_messages else self.messages
         
-        # Convert to LLM format (just role and content)
-        return [{"role": m["role"], "content": m["content"]} for m in recent]
+        # Convert to LLM format (OpenAI style)
+        llm_messages: list[dict[str, Any]] = []
+        for m in recent:
+            mm = dict(m)
+            mm.pop("timestamp", None)
+            llm_messages.append(mm)
+
+        return llm_messages
     
     def clear(self) -> None:
         """Clear all messages in the session."""

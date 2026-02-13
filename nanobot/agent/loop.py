@@ -183,7 +183,7 @@ class AgentLoop:
             channel=msg.channel,
             chat_id=msg.chat_id,
         )
-        
+        base_len = len(messages) # mark start of this turn
         # Agent loop
         iteration = 0
         final_content = None
@@ -213,7 +213,9 @@ class AgentLoop:
                     for tc in response.tool_calls
                 ]
                 messages = self.context.add_assistant_message(
-                    messages, response.content, tool_call_dicts,
+                    messages=messages,
+                    content=response.content,
+                    tool_calls=tool_call_dicts,
                     reasoning_content=response.reasoning_content,
                 )
                 
@@ -228,18 +230,35 @@ class AgentLoop:
             else:
                 # No tool calls, we're done
                 final_content = response.content
+                messages = self.context.add_assistant_message(
+                    messages=messages,
+                    content=final_content,
+                    tool_calls=None,
+                    reasoning_content=response.reasoning_content,
+                )
                 break
         
         if final_content is None:
             final_content = "I've completed processing but have no response to give."
-        
+            session.add_message("assistant", final_content)
+
         # Log response preview
         preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
         logger.info(f"Response to {msg.channel}:{msg.sender_id}: {preview}")
         
         # Save to session
-        session.add_message("user", msg.content)
-        session.add_message("assistant", final_content)
+        new_msgs = messages[base_len:]
+        for m in new_msgs:
+            role = m.get("role")
+            content = m.get("content")
+            if content is None:
+                content = ""
+            extra = {}
+            for k, v in m.items():
+                if k not in ("role", "content"):
+                    extra[k] = v
+            session.add_message(role, content, **extra)
+
         self.sessions.save(session)
         
         return OutboundMessage(
@@ -285,14 +304,14 @@ class AgentLoop:
         if isinstance(cron_tool, CronTool):
             cron_tool.set_context(origin_channel, origin_chat_id)
         
-        # Build messages with the announce content
+        # Build messages with the announcement content
         messages = self.context.build_messages(
             history=session.get_history(),
             current_message=msg.content,
             channel=origin_channel,
             chat_id=origin_chat_id,
         )
-        
+        base_len = len(messages)  # mark start of this turn
         # Agent loop (limited for announce handling)
         iteration = 0
         final_content = None
@@ -319,8 +338,10 @@ class AgentLoop:
                     for tc in response.tool_calls
                 ]
                 messages = self.context.add_assistant_message(
-                    messages, response.content, tool_call_dicts,
-                    reasoning_content=response.reasoning_content,
+                    messages=messages,
+                    content=response.content,
+                    tool_calls=tool_call_dicts,
+                    reasoning_content=response.reasoning_content
                 )
                 
                 for tool_call in response.tool_calls:
@@ -332,14 +353,32 @@ class AgentLoop:
                     )
             else:
                 final_content = response.content
+                messages = self.context.add_assistant_message(
+                    messages=messages,
+                    content=final_content,
+                    tool_calls=None,
+                    reasoning_content=response.reasoning_content
+                )
                 break
         
         if final_content is None:
-            final_content = "Background task completed."
+            session.add_message("assistant", "Background task completed")
         
         # Save to session (mark as system message in history)
         session.add_message("user", f"[System: {msg.sender_id}] {msg.content}")
-        session.add_message("assistant", final_content)
+        # Save to session
+        new_msgs = messages[base_len:]
+        for m in new_msgs:
+            role = m.get("role")
+            content = m.get("content")
+            if content is None:
+                content = ""
+            extra = {}
+            for k, v in m.items():
+                if k not in ("role", "content"):
+                    extra[k] = v
+            session.add_message(role, content, **extra)
+
         self.sessions.save(session)
         
         return OutboundMessage(
