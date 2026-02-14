@@ -42,8 +42,35 @@ class Session:
         self.updated_at = datetime.now()
     
     def get_history(self, max_messages: int = 500) -> list[dict[str, Any]]:
-        """Get recent messages in LLM format (role + content only)."""
-        return [{"role": m["role"], "content": m["content"]} for m in self.messages[-max_messages:]]
+        """
+           Get recent messages in LLM format.
+           Keeps tool-related fields (tool_calls, tool_call_id, name, etc.).
+           Also maps messages with is_system=True to role=system.
+           """
+        out: list[dict[str, Any]] = []
+
+        for m in self.messages[-max_messages:]:
+            role = "system" if m.get("is_system") else m.get("role", "user")
+            content = m.get("content", "")
+
+            msg: dict[str, Any] = {"role": role, "content": content}
+
+            if role == "assistant":
+                if m.get("tool_calls") is not None:
+                    msg["tool_calls"] = m["tool_calls"]
+
+            elif role == "tool":
+                # OpenAI-style tool message
+                if m.get("tool_call_id") is not None:
+                    msg["tool_call_id"] = m["tool_call_id"]
+                if m.get("name") is not None:
+                    msg["name"] = m["name"]
+
+            # remove None values
+            msg = {k: v for k, v in msg.items() if v is not None}
+            out.append(msg)
+
+        return out
     
     def clear(self) -> None:
         """Clear all messages and reset session to initial state."""
