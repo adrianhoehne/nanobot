@@ -9,7 +9,7 @@ from loguru import logger
 from nanobot.bus.events import InboundMessage, OutboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.providers.base import LLMProvider
-from nanobot.agent.context import ContextBuilder
+from nanobot.agent.context import ContextBuilder, add_assistant_message, add_tool_result
 from nanobot.agent.tools.registry import ToolRegistry
 from nanobot.agent.tools.filesystem import ReadFileTool, WriteFileTool, EditFileTool, ListDirTool
 from nanobot.agent.tools.shell import ExecTool
@@ -19,7 +19,6 @@ from nanobot.agent.tools.spawn import SpawnTool
 from nanobot.agent.tools.cron import CronTool
 from nanobot.agent.memory import MemoryStore
 from nanobot.agent.subagent import SubagentManager
-from nanobot.session import Session
 from nanobot.session.manager import Session, SessionManager
 from nanobot.cron.service import CronService
 from nanobot.config.schema import ExecToolConfig
@@ -187,7 +186,7 @@ class AgentLoop:
                     }
                     for tc in response.tool_calls
                 ]
-                messages = self.context.add_assistant_message(
+                messages = add_assistant_message(
                     messages=messages,
                     content=response.content,
                     tool_calls=tool_call_dicts,
@@ -199,7 +198,7 @@ class AgentLoop:
                     args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
                     logger.info(f"Tool call: {tool_call.name}({args_str[:200]})")
                     result = await self.tools.execute(tool_call.name, tool_call.arguments)
-                    messages = self.context.add_tool_result(
+                    messages = add_tool_result(
                         messages, tool_call.id, tool_call.name, result
                     )
                 messages.append({"role": "user", "content": "Reflect on the results and decide next steps."})
