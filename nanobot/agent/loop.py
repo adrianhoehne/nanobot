@@ -130,7 +130,7 @@ class AgentLoop:
             if isinstance(cron_tool, CronTool):
                 cron_tool.set_context(channel, chat_id)
 
-    async def _run_agent_loop(self, initial_messages: list[dict]) -> tuple[str | None, list[str]]:
+    async def _run_agent_loop(self, initial_messages: list[dict]) -> tuple[str | None, list[str], list[dict]]:
         """
         Run the agent iteration loop.
 
@@ -169,7 +169,9 @@ class AgentLoop:
                     for tc in response.tool_calls
                 ]
                 messages = self.context.add_assistant_message(
-                    messages, response.content, tool_call_dicts,
+                    messages=messages,
+                    content=response.content,
+                    tool_calls=tool_call_dicts,
                     reasoning_content=response.reasoning_content,
                 )
 
@@ -186,7 +188,7 @@ class AgentLoop:
                 final_content = response.content
                 break
 
-        return final_content, tools_used
+        return final_content, tools_used, messages
 
     async def run(self) -> None:
         """Run the agent loop, processing messages from the bus."""
@@ -271,17 +273,37 @@ class AgentLoop:
             channel=msg.channel,
             chat_id=msg.chat_id,
         )
-        final_content, tools_used = await self._run_agent_loop(initial_messages)
+
+        base_len = len(initial_messages)
+        final_content, tools_used, full_messages = await self._run_agent_loop(initial_messages)
 
         if final_content is None:
             final_content = "I've completed processing but have no response to give."
         
         preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
         logger.info(f"Response to {msg.channel}:{msg.sender_id}: {preview}")
-        
+
         session.add_message("user", msg.content)
-        session.add_message("assistant", final_content,
-                            tools_used=tools_used if tools_used else None)
+        new_messages = full_messages[base_len:]
+        for m in new_messages:
+            role = m.get("role")
+            content = m.get("content") or ""
+            # Filter internal reflection prompts (those are controller noise)
+            if role == "user" and content.startswith("Reflect on the results"):
+                continue
+
+            extra: dict = {}
+            for k, v in m.items():
+                if k in ("role", "content"):
+                    continue
+                if v is None:
+                    continue
+                extra[k] = v
+            session.add_message(role, content, **extra)
+
+        if tools_used:
+            logger.info("tools_used=%s", tools_used)
+
         self.sessions.save(session)
         
         return OutboundMessage(
@@ -319,13 +341,31 @@ class AgentLoop:
             channel=origin_channel,
             chat_id=origin_chat_id,
         )
-        final_content, _ = await self._run_agent_loop(initial_messages)
+        base_len = len(initial_messages)
+        final_content, _, full_messages = await self._run_agent_loop(initial_messages)
 
         if final_content is None:
             final_content = "Background task completed."
-        
-        session.add_message("user", f"[System: {msg.sender_id}] {msg.content}")
-        session.add_message("assistant", final_content)
+
+        # Persist as system
+        session.add_message("system", f"[System: {msg.sender_id}] {msg.content}")
+        new_messages = full_messages[base_len:]
+        for m in new_messages:
+            role = m.get("role")
+            content = m.get("content") or ""
+            # Filter internal reflection prompts (those are controller noise)
+            if role == "user" and content.startswith("Reflect on the results"):
+                continue
+
+            extra: dict = {}
+            for k, v in m.items():
+                if k in ("role", "content"):
+                    continue
+                if v is None:
+                    continue
+                extra[k] = v
+            session.add_message(role, content, **extra)
+
         self.sessions.save(session)
         
         return OutboundMessage(
