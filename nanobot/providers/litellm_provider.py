@@ -127,6 +127,7 @@ class LiteLLMProvider(LLMProvider):
             "messages": messages,
             "max_tokens": max_tokens,
             "temperature": temperature,
+            "timeout": 1800
         }
         
         # Apply model-specific overrides (e.g. kimi-k2.5 temperature)
