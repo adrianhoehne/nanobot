@@ -3,7 +3,6 @@
 import asyncio
 import json
 from pathlib import Path
-from typing import Any
 
 from loguru import logger
 
@@ -20,7 +19,28 @@ from nanobot.agent.tools.spawn import SpawnTool
 from nanobot.agent.tools.cron import CronTool
 from nanobot.agent.memory import MemoryStore
 from nanobot.agent.subagent import SubagentManager
+from nanobot.session import Session
 from nanobot.session.manager import Session, SessionManager
+from nanobot.cron.service import CronService
+from nanobot.config.schema import ExecToolConfig
+
+
+async def add_new_messages_to_session(new_messages: list[dict], session: Session):
+    for m in new_messages:
+        role = m.get("role")
+        content = m.get("content") or ""
+        # Filter internal reflection prompts (those are controller noise)
+        if role == "user" and content.startswith("Reflect on the results"):
+            continue
+
+        extra: dict = {}
+        for k, v in m.items():
+            if k in ("role", "content"):
+                continue
+            if v is None:
+                continue
+            extra[k] = v
+        session.add_message(role, content, **extra)
 
 
 class AgentLoop:
@@ -36,23 +56,22 @@ class AgentLoop:
     """
 
     def __init__(
-        self,
-        bus: MessageBus,
-        provider: LLMProvider,
-        workspace: Path,
-        model: str | None = None,
-        max_iterations: int = 20,
-        temperature: float = 0.7,
-        max_tokens: int = 4096,
-        memory_window: int = 50,
-        brave_api_key: str | None = None,
-        exec_config: "ExecToolConfig | None" = None,
-        cron_service: "CronService | None" = None,
-        restrict_to_workspace: bool = False,
-        session_manager: SessionManager | None = None,
+            self,
+            bus: MessageBus,
+            provider: LLMProvider,
+            workspace: Path,
+            model: str | None = None,
+            max_iterations: int = 20,
+            temperature: float = 0.7,
+            max_tokens: int = 4096,
+            memory_window: int = 50,
+            no_xml_for_skills: bool = False,
+            brave_api_key: str | None = None,
+            exec_config: ExecToolConfig | None = None,
+            cron_service: CronService | None = None,
+            restrict_to_workspace: bool = False,
+            session_manager: SessionManager | None = None,
     ):
-        from nanobot.config.schema import ExecToolConfig
-        from nanobot.cron.service import CronService
         self.bus = bus
         self.provider = provider
         self.workspace = workspace
@@ -66,7 +85,7 @@ class AgentLoop:
         self.cron_service = cron_service
         self.restrict_to_workspace = restrict_to_workspace
 
-        self.context = ContextBuilder(workspace)
+        self.context = ContextBuilder(workspace, no_xml_for_skills)
         self.sessions = session_manager or SessionManager(workspace)
         self.tools = ToolRegistry()
         self.subagents = SubagentManager(
@@ -80,10 +99,10 @@ class AgentLoop:
             exec_config=self.exec_config,
             restrict_to_workspace=restrict_to_workspace,
         )
-        
+
         self._running = False
         self._register_default_tools()
-    
+
     def _register_default_tools(self) -> None:
         """Register the default set of tools."""
         # File tools (restrict to workspace if configured)
@@ -92,30 +111,30 @@ class AgentLoop:
         self.tools.register(WriteFileTool(allowed_dir=allowed_dir))
         self.tools.register(EditFileTool(allowed_dir=allowed_dir))
         self.tools.register(ListDirTool(allowed_dir=allowed_dir))
-        
+
         # Shell tool
         self.tools.register(ExecTool(
             working_dir=str(self.workspace),
             timeout=self.exec_config.timeout,
             restrict_to_workspace=self.restrict_to_workspace,
         ))
-        
+
         # Web tools
         self.tools.register(WebSearchTool(api_key=self.brave_api_key))
         self.tools.register(WebFetchTool())
-        
+
         # Message tool
         message_tool = MessageTool(send_callback=self.bus.publish_outbound)
         self.tools.register(message_tool)
-        
+
         # Spawn tool (for subagents)
         spawn_tool = SpawnTool(manager=self.subagents)
         self.tools.register(spawn_tool)
-        
+
         # Cron tool (for scheduling)
         if self.cron_service:
             self.tools.register(CronTool(self.cron_service))
-    
+
     def _set_tool_context(self, channel: str, chat_id: str) -> None:
         """Update context for all tools that need routing info."""
         if message_tool := self.tools.get("message"):
@@ -214,12 +233,12 @@ class AgentLoop:
                     ))
             except asyncio.TimeoutError:
                 continue
-    
+
     def stop(self) -> None:
         """Stop the agent loop."""
         self._running = False
         logger.info("Agent loop stopping")
-    
+
     async def _process_message(self, msg: InboundMessage, session_key: str | None = None) -> OutboundMessage | None:
         """
         Process a single inbound message.
@@ -234,13 +253,13 @@ class AgentLoop:
         # System messages route back via chat_id ("channel:chat_id")
         if msg.channel == "system":
             return await self._process_system_message(msg)
-        
+
         preview = msg.content[:80] + "..." if len(msg.content) > 80 else msg.content
         logger.info(f"Processing message from {msg.channel}:{msg.sender_id}: {preview}")
-        
+
         key = session_key or msg.session_key
         session = self.sessions.get_or_create(key)
-        
+
         # Handle slash commands
         cmd = msg.content.strip().lower()
         if cmd == "/new":
@@ -257,11 +276,11 @@ class AgentLoop:
 
             asyncio.create_task(_consolidate_and_cleanup())
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id,
-                                  content="New session started. Memory consolidation in progress.")
+                                   content="New session started. Memory consolidation in progress.")
         if cmd == "/help":
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id,
-                                  content="🐈 nanobot commands:\n/new — Start a new conversation\n/help — Show available commands")
-        
+                                   content="🐈 nanobot commands:\n/new — Start a new conversation\n/help — Show available commands")
+
         if len(session.messages) > self.memory_window:
             asyncio.create_task(self._consolidate_memory(session))
 
@@ -279,40 +298,26 @@ class AgentLoop:
 
         if final_content is None:
             final_content = "I've completed processing but have no response to give."
-        
+
         preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
         logger.info(f"Response to {msg.channel}:{msg.sender_id}: {preview}")
 
         session.add_message("user", msg.content)
         new_messages = full_messages[base_len:]
-        for m in new_messages:
-            role = m.get("role")
-            content = m.get("content") or ""
-            # Filter internal reflection prompts (those are controller noise)
-            if role == "user" and content.startswith("Reflect on the results"):
-                continue
-
-            extra: dict = {}
-            for k, v in m.items():
-                if k in ("role", "content"):
-                    continue
-                if v is None:
-                    continue
-                extra[k] = v
-            session.add_message(role, content, **extra)
+        await add_new_messages_to_session(new_messages, session)
 
         if tools_used:
             logger.info("tools_used=%s", tools_used)
 
         self.sessions.save(session)
-        
+
         return OutboundMessage(
             channel=msg.channel,
             chat_id=msg.chat_id,
             content=final_content,
             metadata=msg.metadata or {},  # Pass through for channel-specific needs (e.g. Slack thread_ts)
         )
-    
+
     async def _process_system_message(self, msg: InboundMessage) -> OutboundMessage | None:
         """
         Process a system message (e.g., subagent announce).
@@ -321,7 +326,7 @@ class AgentLoop:
         the response back to the correct destination.
         """
         logger.info(f"Processing system message from {msg.sender_id}")
-        
+
         # Parse origin from chat_id (format: "channel:chat_id")
         if ":" in msg.chat_id:
             parts = msg.chat_id.split(":", 1)
@@ -331,7 +336,7 @@ class AgentLoop:
             # Fallback
             origin_channel = "cli"
             origin_chat_id = msg.chat_id
-        
+
         session_key = f"{origin_channel}:{origin_chat_id}"
         session = self.sessions.get_or_create(session_key)
         self._set_tool_context(origin_channel, origin_chat_id)
@@ -350,30 +355,15 @@ class AgentLoop:
         # Persist as system
         session.add_message("system", f"[System: {msg.sender_id}] {msg.content}")
         new_messages = full_messages[base_len:]
-        for m in new_messages:
-            role = m.get("role")
-            content = m.get("content") or ""
-            # Filter internal reflection prompts (those are controller noise)
-            if role == "user" and content.startswith("Reflect on the results"):
-                continue
-
-            extra: dict = {}
-            for k, v in m.items():
-                if k in ("role", "content"):
-                    continue
-                if v is None:
-                    continue
-                extra[k] = v
-            session.add_message(role, content, **extra)
-
+        await add_new_messages_to_session(new_messages, session)
         self.sessions.save(session)
-        
+
         return OutboundMessage(
             channel=origin_channel,
             chat_id=origin_chat_id,
             content=final_content
         )
-    
+
     async def _consolidate_memory(self, session, archive_all: bool = False) -> None:
         """Consolidate old messages into MEMORY.md + HISTORY.md.
 
@@ -454,11 +444,11 @@ Respond with ONLY valid JSON, no markdown fences."""
             logger.error(f"Memory consolidation failed: {e}")
 
     async def process_direct(
-        self,
-        content: str,
-        session_key: str = "cli:direct",
-        channel: str = "cli",
-        chat_id: str = "direct",
+            self,
+            content: str,
+            session_key: str = "cli:direct",
+            channel: str = "cli",
+            chat_id: str = "direct",
     ) -> str:
         """
         Process a message directly (for CLI or cron usage).
@@ -478,6 +468,6 @@ Respond with ONLY valid JSON, no markdown fences."""
             chat_id=chat_id,
             content=content
         )
-        
+
         response = await self._process_message(msg, session_key=session_key)
         return response.content if response else ""

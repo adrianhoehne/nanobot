@@ -20,10 +20,11 @@ class ContextBuilder:
     
     BOOTSTRAP_FILES = ["AGENTS.md", "SOUL.md", "USER.md", "TOOLS.md", "IDENTITY.md"]
     
-    def __init__(self, workspace: Path):
+    def __init__(self, workspace: Path, no_xml_skills: bool = False) -> None:
         self.workspace = workspace
         self.memory = MemoryStore(workspace)
         self.skills = SkillsLoader(workspace)
+        self.no_xml_skills = no_xml_skills
     
     def build_system_prompt(self, skill_names: list[str] | None = None) -> str:
         """
@@ -34,11 +35,10 @@ class ContextBuilder:
         
         Returns:
             Complete system prompt.
+            :param skill_names:
         """
-        parts = []
-        
         # Core identity
-        parts.append(self._get_identity())
+        parts = [self._get_identity()]
         
         # Bootstrap files
         bootstrap = self._load_bootstrap_files()
@@ -49,24 +49,38 @@ class ContextBuilder:
         memory = self.memory.get_memory_context()
         if memory:
             parts.append(f"# Memory\n\n{memory}")
-        
-        # Skills - progressive loading
-        # 1. Always-loaded skills: include full content
-        always_skills = self.skills.get_always_skills()
-        if always_skills:
-            always_content = self.skills.load_skills_for_context(always_skills)
-            if always_content:
-                parts.append(f"# Active Skills\n\n{always_content}")
-        
-        # 2. Available skills: only show summary (agent uses read_file to load)
-        skills_summary = self.skills.build_skills_summary()
-        if skills_summary:
-            parts.append(f"""# Skills
 
-The following skills extend your capabilities. To use a skill, read its SKILL.md file using the read_file tool.
-Skills with available="false" need dependencies installed first - you can try installing them with apt/brew.
+        if self.no_xml_skills:
+            # add only names
+            # Available skills: keep it tiny with only names. The skills are already transmitted in chatml style
+            skills_list = skill_names or self.skills.list_skills()
+            names = [s["name"] if isinstance(s, dict) else s for s in skills_list]
+            names = sorted(set(names))
+            if names:
+                workspace_path = str(self.workspace.expanduser().resolve())
+                parts.append(
+                    "# Skills\n\n"
+                    "Available skills: " + ", ".join(names) + "\n")
+                for skill_name in names:
+                    parts.append("Load details with read_file: " + workspace_path + "/skills/" + skill_name + "/SKILL.md\n")
+        else:
+            # Skills - progressive loading
+            # 1. Always-loaded skills: include full content
+            always_skills = self.skills.get_always_skills()
+            if always_skills:
+                always_content = self.skills.load_skills_for_context(always_skills)
+                if always_content:
+                    parts.append(f"# Active Skills\n\n{always_content}")
 
-{skills_summary}""")
+            # 2. Available skills: only show summary (agent uses read_file to load)
+            skills_summary = self.skills.build_skills_summary()
+            if skills_summary:
+                parts.append(f"""# Skills
+    
+    The following skills extend your capabilities. To use a skill, read its SKILL.md file using the read_file tool.
+    Skills with available="false" need dependencies installed first - you can try installing them with apt/brew.
+    
+    {skills_summary}""")
         
         return "\n\n---\n\n".join(parts)
     
@@ -80,14 +94,7 @@ Skills with available="false" need dependencies installed first - you can try in
         system = platform.system()
         runtime = f"{'macOS' if system == 'Darwin' else system} {platform.machine()}, Python {platform.python_version()}"
         
-        return f"""# nanobot 🐈
-
-You are nanobot, a helpful AI assistant. You have access to tools that allow you to:
-- Read, write, and edit files
-- Execute shell commands
-- Search the web and fetch web pages
-- Send messages to users on chat channels
-- Spawn subagents for complex background tasks
+        return f"""#
 
 ## Current Time
 {now} ({tz})
@@ -100,12 +107,6 @@ Your workspace is at: {workspace_path}
 - Long-term memory: {workspace_path}/memory/MEMORY.md
 - History log: {workspace_path}/memory/HISTORY.md (grep-searchable)
 - Custom skills: {workspace_path}/skills/{{skill-name}}/SKILL.md
-
-IMPORTANT: When responding to direct questions or conversations, reply directly with your text response.
-Only use the 'message' tool when you need to send a message to a specific chat channel (like WhatsApp).
-For normal conversation, just respond with text - do not call the message tool.
-
-Always be helpful, accurate, and concise. When using tools, think step by step: what you know, what you need, and why you chose this tool.
 When remembering something important, write to {workspace_path}/memory/MEMORY.md
 To recall past events, grep {workspace_path}/memory/HISTORY.md"""
     
