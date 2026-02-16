@@ -1,76 +1,73 @@
-# Environment
-## Current Time
-{now} ({tz})
+# Nanobot — Tools & Operational Reference
 
-## Runtime
-{runtime}
+This document describes the tools the agent can call and the conventions for using them.
+Keep tool usage safe, minimal, and goal‑directed.
 
-## Python
-{python}
+## Workspace Conventions
+- Work inside: `{workspace_path}`
+- Memory:
+  - `{workspace_path}/memory/MEMORY.md` (long‑term)
+  - `{workspace_path}/memory/HISTORY.md` (append‑only)
+- Custom skills:
+  - `{workspace_path}/skills/<skill-name>/SKILL.md`
 
-## Workspace
-Your workspace is at: {workspace_path}
-- Long-term memory: {workspace_path}/memory/MEMORY.md
-- History log: {workspace_path}/memory/HISTORY.md (grep-searchable)
-- Custom skills: {workspace_path}/skills/{{skill-name}}/SKILL.md
+If a task mentions a custom skill, load it with `read_file` first.
 
-# Tools and Skills
-You have access to:
-- File operations (read_file, write_file, edit_file, list_dir)
-- Shell commands (exec)
-- Web access (web_search, web_fetch)
-- Messaging (message)
-- Background tasks (spawn)
+---
 
-## File Operation Instructions
+## File Tools
 
 ### read_file
-Read the contents of a file.
+Read a text file.
 ```
 read_file(path: str) -> str
 ```
+Use when you need context before editing or answering.
 
 ### write_file
-Write content to a file (creates parent directories if needed).
+Write a full file (creates parent directories if needed).
 ```
 write_file(path: str, content: str) -> str
 ```
+Use for complete rewrites or new files.
 
 ### edit_file
-Edit a file by replacing specific text.
+Replace specific text in a file (literal string replace).
 ```
 edit_file(path: str, old_text: str, new_text: str) -> str
 ```
+Use for small, targeted edits. Prefer multiple small edits over one risky large edit.
 
 ### list_dir
-List contents of a directory.
+List directory contents.
 ```
 list_dir(path: str) -> str
 ```
 
-## Shell Execution
+---
+
+## Shell Tool
 
 ### exec
-Execute a shell command and return output.
+Run a shell command and return stdout/stderr output.
 ```
-exec(command: str, working_dir: str = None) -> str
+exec(command: str, working_dir: str | None = None) -> str
 ```
 
-**Safety Notes:**
-- Commands have a configurable timeout (default 60s)
-- Dangerous commands are blocked (rm -rf, format, dd, shutdown, etc.)
-- Output is truncated at 10,000 characters
-- Optional `restrictToWorkspace` config to limit paths
+Safety & practicality:
+- Assume a command may fail; handle errors and explain fixes.
+- Avoid destructive operations (e.g., recursive deletes, disk formatting, reboot/shutdown).
+- Output may be truncated; if needed, narrow the command (grep, head, tail).
 
-## Web Access
+---
+
+## Web Tools
 
 ### web_search
-Search the web using Brave Search API.
+Search the web.
 ```
 web_search(query: str, count: int = 5) -> str
 ```
-
-Returns search results with titles, URLs, and snippets. Requires `tools.web.search.apiKey` in config.
 
 ### web_fetch
 Fetch and extract main content from a URL.
@@ -78,127 +75,68 @@ Fetch and extract main content from a URL.
 web_fetch(url: str, extractMode: str = "markdown", maxChars: int = 50000) -> str
 ```
 
-**Notes:**
-- Content is extracted using readability
-- Supports markdown or plain text extraction
-- Output is truncated at 50,000 characters by default
+Notes:
+- Use web_search first, then web_fetch for promising sources.
+- Prefer primary sources (official docs, repos, specs) for technical questions.
 
-IMPORTANT: When responding to direct questions or conversations, reply directly with your text response.
-Only use the 'message' tool when you need to send a message to a specific chat channel (like WhatsApp).
-For normal conversation, just respond with text - do not call the message tool.
+---
 
-Always be helpful, accurate, and concise. When using tools, think step by step: what you know, what you need, and why you chose this tool.
-When remembering something important, write to {workspace_path}/memory/MEMORY.md
-To recall past events, grep {workspace_path}/memory/HISTORY.md
+## Messaging Tool
 
-## Memory
-- `memory/MEMORY.md` — This file is to save long-term facts (preferences, context, relationships)
-- `memory/HISTORY.md` — append-only event log, search with grep to recall past events
+### message
+Send a message to a specific channel (e.g., WhatsApp/Telegram) if and only if the task requires it.
+For normal conversation replies, do **not** call this tool—reply with plain text.
 
-## Scheduled Reminders
-When user asks for a reminder at a specific time, use `exec` to run:
-```
-nanobot cron add --name "reminder" --message "Your message" --at "YYYY-MM-DDTHH:MM:SS" --deliver --to "USER_ID" --channel "CHANNEL"
-```
-Get USER_ID and CHANNEL from the current session (e.g., `8281248569` and `telegram` from `telegram:8281248569`).
+---
 
-**Do NOT just write reminders to MEMORY.md** — that won't trigger actual notifications.
-
-## Heartbeat Tasks
-`HEARTBEAT.md` is checked every 30 minutes. You can manage periodic tasks by editing this file:
-
-- **Add a task**: Use `edit_file` to append new tasks to `HEARTBEAT.md`
-- **Remove a task**: Use `edit_file` to remove completed or obsolete tasks
-- **Rewrite tasks**: Use `write_file` to completely rewrite the task list
-
-Task format examples:
-```
-- [ ] Check calendar and remind of upcoming events
-- [ ] Scan inbox for urgent emails
-- [ ] Check weather forecast for today
-```
-
-## Skills
-The following skills extend your capabilities. To use a skill, read its SKILL.md file using the read_file tool.
-Skills with available="false" need dependencies installed first - you can try installing them with apt/brew or pip.
-### Active Skills
-{active_skills}
-
-### Available Skills
-{skill_summary}
-
-## Background Tasks
+## Background Work
 
 ### spawn
-Spawn a subagent to handle a task in the background.
+Create a sub‑task handled by a sub‑agent.
 ```
-spawn(task: str, label: str = None) -> str
+spawn(task: str, label: str | None = None) -> str
 ```
+Use only for genuinely long, independent work. Prefer doing the work directly when possible.
 
-Use for complex or time-consuming tasks that can run independently. The subagent will complete the task and report back when done.
+---
 
 ## Scheduled Reminders (Cron)
 
-Use the `exec` tool to create scheduled reminders with `nanobot cron add`:
+When the user requests a reminder/notification at a time or on a schedule, create it via `exec`:
 
-### Set a recurring reminder
-```bash
-# Every day at 9am
-nanobot cron add --name "morning" --message "Good morning! ☀️" --cron "0 9 * * *"
-
-# Every 2 hours
-nanobot cron add --name "water" --message "Drink water! 💧" --every 7200
+### One‑time reminder
+```
+nanobot cron add --name "<name>" --message "<text>" --at "YYYY-MM-DDTHH:MM:SS" --deliver --to "<USER_ID>" --channel "<CHANNEL>"
 ```
 
-### Set a one-time reminder
-```bash
-# At a specific time (ISO format)
-nanobot cron add --name "meeting" --message "Meeting starts now!" --at "2025-01-31T15:00:00"
+### Recurring reminders
+```
+# Cron expression
+nanobot cron add --name "<name>" --message "<text>" --cron "0 9 * * *"
+
+# Every N seconds
+nanobot cron add --name "<name>" --message "<text>" --every 7200
 ```
 
 ### Manage reminders
-```bash
-nanobot cron list              # List all jobs
-nanobot cron remove <job_id>   # Remove a job
+```
+nanobot cron list
+nanobot cron remove <job_id>
 ```
 
-## Heartbeat Task Management
+Important:
+- Do **not** “store reminders” in MEMORY.md. That does not create notifications.
+- USER_ID and CHANNEL come from the current session identifier (example format: `telegram:8281248569`).
 
-The `HEARTBEAT.md` file in the workspace is checked every 30 minutes.
-Use file operations to manage periodic tasks:
+---
 
-### Add a heartbeat task
-```python
-# Append a new task
-edit_file(
-    path="HEARTBEAT.md",
-    old_text="## Example Tasks",
-    new_text="- [ ] New periodic task here\n\n## Example Tasks"
-)
+## Heartbeat Tasks
+
+`HEARTBEAT.md` in the workspace is checked periodically (e.g., every 30 minutes).
+Use file tools to manage the checklist.
+
+Example format:
 ```
-
-### Remove a heartbeat task
-```python
-# Remove a specific task
-edit_file(
-    path="HEARTBEAT.md",
-    old_text="- [ ] Task to remove\n",
-    new_text=""
-)
+- [ ] Check calendar for upcoming events
+- [ ] Scan inbox for urgent emails
 ```
-
-### Rewrite all tasks
-```python
-# Replace the entire file
-write_file(
-    path="HEARTBEAT.md",
-    content="# Heartbeat Tasks\n\n- [ ] Task 1\n- [ ] Task 2\n"
-)
-```
-
-## Adding Custom Tools
-
-To add custom tools:
-1. Create a class that extends `Tool` in `nanobot/agent/tools/`
-2. Implement `name`, `description`, `parameters`, and `execute`
-3. Register it in `AgentLoop._register_default_tools()`
